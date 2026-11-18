@@ -1,5 +1,8 @@
-# Only the page and its README are published; the source tree stays local.
+# Only the page, its README and the Codespaces setup are published; the source tree stays local.
 *
 !.gitignore
 !README.md
 !boxcount_tool.html
+!index.html
+!.devcontainer/
+!.devcontainer/devcontainer.json
