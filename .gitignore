@@ -1,0 +1,5 @@
+# Only the page and its README are published; the source tree stays local.
+*
+!.gitignore
+!README.md
+!boxcount_tool.html
