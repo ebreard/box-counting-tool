@@ -76,3 +76,7 @@ implementation stored in the page. All 165 agree with Python; a run takes 10 to 
 
 This repository holds the page and this file. The Python implementation, its benchmark and
 the tests of the page are kept by E.C.P. Breard; ask for them.
+
+## Licence
+
+MIT; see `LICENSE`.
