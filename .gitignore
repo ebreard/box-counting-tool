@@ -1,6 +1,7 @@
-# Only the page, its README and the Codespaces setup are published; the source tree stays local.
+# Only the page, its README, the Pages marker and the Codespaces setup are published; the source tree stays local.
 *
 !.gitignore
+!.nojekyll
 !README.md
 !boxcount_tool.html
 !index.html

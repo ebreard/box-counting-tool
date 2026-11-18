@@ -6,25 +6,19 @@ Dr Johan (Yoshi) Gilchrist (Dartmouth College).
 
 ## Open it
 
-Download `boxcount_tool.html` (on GitHub: open the file, then Download raw file) and
+Open **https://ebreard.github.io/box-counting-tool/** in any recent browser. Nothing to
+install; images you load are read in the browser and never uploaded.
+
+Or download `boxcount_tool.html` (on GitHub: open the file, then Download raw file) and
 double-click it. It is one self-contained file (about 440 kB): the code, the validation
-references and the logo are inside it, and images are read in the browser, never uploaded.
-The IBM Plex fonts come from Google Fonts when online and fall back to system fonts when
-offline. Checked in a Chromium browser, not yet in Firefox or Safari.
+references and the logo are inside it. The IBM Plex fonts come from Google Fonts when
+online and fall back to system fonts when offline. Checked in a Chromium browser, not yet
+in Firefox or Safari.
 
-### In the browser, on GitHub
-
-This repository is private, so there is no public web link. The button below starts a
-GitHub Codespace under your own account (it uses your free monthly Codespaces hours),
-serves the page and opens it in a new browser tab. Sign in to GitHub with access to this
-repository; the first start takes about a minute.
+The page can also be served from a GitHub Codespace under your own account (it uses your
+free monthly Codespaces hours); the web address above needs none of that.
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/ebreard/box-counting-tool)
-
-If no tab opens (a pop-up blocker can stop it), open the Ports tab and click the globe
-beside port 8000. Images you load stay in your browser; the codespace only serves the page.
-Stop the codespace from github.com/codespaces when you are done; it also stops itself when
-idle.
 
 ## Use it
 
