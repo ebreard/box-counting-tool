@@ -10,7 +10,7 @@ Open **https://ebreard.github.io/box-counting-tool/** in any recent browser. Not
 install; images you load are read in the browser and never uploaded.
 
 Or download `boxcount_tool.html` (on GitHub: open the file, then Download raw file) and
-double-click it. It is one self-contained file (about 440 kB): the code, the validation
+double-click it. It is one self-contained file (about 470 kB): the code, the validation
 references and the logo are inside it. The IBM Plex fonts come from Google Fonts when
 online and fall back to system fonts when offline. Checked in a Chromium browser, not yet
 in Firefox or Safari.
@@ -25,12 +25,19 @@ free monthly Codespaces hours); the web address above needs none of that.
 1. Open image (or drop or paste one).
 2. Draw the mask with the brush, polygon or rectangle (the eraser removes). For the
    dimension of one outline, draw a band along the edge with both sides of it inside; a
-   mask drawn inside the object measures the texture within it.
+   mask drawn inside the object measures the texture within it. Region "Drawn mask, object
+   only, eroded by k px" keeps only the object inside the mask (darker or brighter than
+   its background, by Otsu), shrunk by k px, so that the contours inside the object are
+   counted and its edge is not.
 3. Choose the channel, the threshold (Otsu button: Otsu inside the mask) and the mode.
-   Interface counts the boxes that hold the boundary between the two classes; Set counts
-   the boxes that hold any foreground pixel.
+   Grey is the Rec. 601 luminance; Luminance (Rec. 709) is the grey of scikit-image's
+   rgb2gray. Interface counts the boxes that hold the boundary between the two classes;
+   Set counts the boxes that hold any foreground pixel.
 4. Analyse: box counts N(s) at 16 grid origins, the local slope, D over the automatic
    straight window, and a quality flag. Threshold scan: D against the threshold level.
+   The noise check kappa (with the fit and for each scan level) is the share of the
+   contour that stays within 1 px when one grey level of noise is added, corrected for
+   chance; below 0.5 the smallest boxes measure noise.
 5. Export: CSV, PNG of the plots, JSON, or a text summary.
 
 ## Help me choose

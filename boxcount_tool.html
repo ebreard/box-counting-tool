@@ -233,6 +233,9 @@ progress { width: 100%; height: 6px; margin-top: 10px; accent-color: var(--ember
 .toolbar .grow label { font-size: 12.5px; color: var(--body); white-space: nowrap; }
 .toolbar .grow input[type=range] { flex: 1 1 100px; min-width: 80px; }
 .polybar { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; }
+.regionbar { margin: 10px 0 0; }
+.regionbar label:not(.lab) { font-size: 12.5px; color: var(--body); }
+.regionbar input[type=number] { width: 64px; }
 .stagecard .chk { margin: 2px 0 0; }
 .stagecard .info { margin-top: 8px; }
 .stagewrap { display: flex; justify-content: center; margin-top: 8px; }
@@ -381,6 +384,7 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
         <div class="row"><label for="selChannel">Channel</label></div>
         <select id="selChannel">
           <option value="grey">Grey</option>
+          <option value="luma709">Luminance (Rec. 709)</option>
           <option value="red">Red</option>
           <option value="green">Green</option>
           <option value="blue">Blue</option>
@@ -507,6 +511,19 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
         <button type="button" id="btnPolyClose" class="btn-primary" disabled>Close polygon</button>
         <button type="button" id="btnPolyBack" disabled>Remove last vertex</button>
         <button type="button" id="btnPolyCancel" disabled>Cancel polygon</button>
+      </div>
+      <div class="toolbar regionbar">
+        <label class="lab" for="selRegion">Region</label>
+        <select id="selRegion">
+          <option value="mask">Drawn mask</option>
+          <option value="object">Drawn mask, object only, eroded by k px</option>
+        </select>
+        <select id="selRegionSide" aria-label="Side of the Otsu threshold that is the object">
+          <option value="darker">object darker than its background</option>
+          <option value="brighter">object brighter than its background</option>
+        </select>
+        <label for="inErode">k (px)</label>
+        <input type="number" id="inErode" min="0" max="200" step="1" value="10">
       </div>
       <p class="info" id="roiInfo" aria-live="polite"></p>
       <div class="stagewrap" id="stageWrap">
@@ -651,6 +668,11 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
         <p>The image is turned into two classes by a threshold on one channel inside the mask. Boxes of side s are laid over it at 16 grid origins (4 per axis) and N(s), the mean number of boxes that hold the outline (Interface) or any foreground pixel (Set), is counted for box sides about 6 per octave. D is the slope of log N against log 1/s over the widest range of sizes on which that line is straight: drift (slope of the upper half of the range minus the lower half) at most 0.08, rms residual at most 0.03 in log10 N, at least 6 sizes over at least 0.7 decades, at least 30 boxes per size and at least 8 boxes across the mask. A range that fails these checks is flagged, and a flagged D is the least bad window, not a dimension. This is the box-counting (Minkowski-Bouligand) dimension over a finite range of scales; it equals the Hausdorff dimension only for special sets.</p>
         <p>Interface counts the pixel edges between unlike pixels, so a mask and its complement give the same count and the mask border makes no outline. Set counts foreground pixels: use it for thin curves and dust, not for a filled region (a region with area has dimension 2 at small boxes).</p>
         <p>D_err is a precision (spread over windows and grid origins), not an accuracy. On the benchmark images D was off by up to 0.1, usually low: quote D to plus or minus 0.1 at best.</p>
+
+        <h4>Luminance, object region and noise check</h4>
+        <p><b>Luminance (Rec. 709)</b> is 0.2125 R + 0.7154 G + 0.0721 B, the weights of rgb2gray in scikit-image, rounded to 8 bits. Grey is the Rec. 601 luminance, 0.299 R + 0.587 G + 0.114 B; the two differ by a few grey levels where the colour is strong.</p>
+        <p><b>Object region</b> (Region: drawn mask, object only) narrows the drawn mask to the object inside it, on the chosen channel before the pre-blur: the pixels darker (or brighter) than the Otsu threshold of the mask, their largest 8-connected piece, a closing by a 9 x 9 square, holes filled, then an erosion by a disc of radius k px (k = 0: no erosion). Pixels outside the drawn mask stay out. The region then replaces the mask everywhere: fit, threshold scan, suggested settings, robustness and calibration. Its edge is a mask border, so it makes no outline: only the contours inside the object are counted, at least k px from its edge.</p>
+        <p><b>Noise check (kappa)</b>: noise of 1 grey level (standard deviation, on 0 to 255) is added to the channel after the pre-blur, twice with independent draws, and each copy is thresholded like the photo. kappa is the share of the first contour that lies within 1 px of the second, corrected for chance: about 1 when the noise barely moves the contour, about 0 when it moves it at random. Below 0.5 the smallest boxes measure noise at this threshold rather than the outline. It is shown with the fit, for each level of the threshold scan and in the robustness text; it does not change the robustness verdict.</p>
 
         <h4>Suggested settings (rules fixed in advance)</h4>
         <ul>
@@ -1248,7 +1270,8 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
   }
 
   // Rec. 601 luminance, or another channel, of RGBA bytes -> Uint8Array (rounded), or Float64Array when asFloat.
-  // channel: grey | red | green | blue | max | saturation | bminusr | ratio
+  // channel: grey | luma709 | red | green | blue | max | saturation | bminusr | ratio
+  // luma709 = Rec. 709 luminance with the weights of skimage rgb2gray (boxcount.py to_gray(weights="709")).
   // ratio = 100 B / (R + 1) clipped to 255 (the b/r channel of plume_common.py; the clip does not move a threshold below 255).
   function toGray(rgba, w, h, channel, asFloat) {
     const n = w * h;
@@ -1265,6 +1288,7 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
         case "saturation": { const mx = Math.max(r, g, b), mn = Math.min(r, g, b); v = mx > 0 ? (mx - mn) / mx * 255 : 0; break; }
         case "bminusr": v = (b - r + 255) / 2; break;
         case "ratio": v = Math.min(255, 100 * b / (r + 1)); break;
+        case "luma709": v = r * 0.2125 + g * 0.7154 + b * 0.0721; break;
         default: v = r * 0.299 + g * 0.587 + b * 0.114;
       }
       out[i] = asFloat ? v : Math.round(v);
@@ -1759,9 +1783,251 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
     return out;
   }
 
+  // ------------------------------------------------------------------ object region and noise stability (boxcount.py object_region, noise_stability)
+
+  // Runs of the pixels equal to val (0 or 1) in each row of a 0/1 image, joined into pieces (8-connected when diag, else
+  // 4-connected) by union-find. The root of a piece is its first run in raster order. Returns { rs, re, root, rowStart }:
+  // run i spans columns rs[i] to re[i] of the row y with rowStart[y] <= i < rowStart[y + 1]; root[i] is its piece.
+  function runPieces(m, w, h, val, diag) {
+    let cap = 4096, rs = new Int32Array(cap), re = new Int32Array(cap), nr = 0;
+    const rowStart = new Int32Array(h + 1), t = diag ? 1 : 0;
+    for (let y = 0; y < h; y++) {
+      const o = y * w;
+      rowStart[y] = nr;
+      let x = 0;
+      while (x < w) {
+        if (m[o + x] !== val) { x++; continue; }
+        const s = x;
+        while (x < w && m[o + x] === val) x++;
+        if (nr === cap) {
+          cap *= 2;
+          const a = new Int32Array(cap), b = new Int32Array(cap);
+          a.set(rs); b.set(re); rs = a; re = b;
+        }
+        rs[nr] = s; re[nr] = x - 1; nr++;
+      }
+    }
+    rowStart[h] = nr;
+    const root = new Int32Array(nr);
+    for (let i = 0; i < nr; i++) root[i] = i;
+    const find = function (a) { while (root[a] !== a) { root[a] = root[root[a]]; a = root[a]; } return a; };
+    for (let y = 1; y < h; y++) {
+      let i = rowStart[y - 1], j = rowStart[y];
+      const ie = rowStart[y], je = rowStart[y + 1];
+      while (i < ie && j < je) {
+        if (re[i] + t < rs[j]) { i++; continue; }
+        if (re[j] + t < rs[i]) { j++; continue; }
+        const a = find(i), b = find(j);
+        if (a < b) root[b] = a; else if (b < a) root[a] = b;
+        if (re[i] < re[j]) i++; else j++;
+      }
+    }
+    for (let i = 0; i < nr; i++) root[i] = find(i);
+    return { rs: rs, re: re, root: root, rowStart: rowStart };
+  }
+  // Keep the largest 8-connected piece of a 0/1 image, in place (on a tie the piece met first in raster order).
+  function keepLargest8(m, w, h) {
+    const P = runPieces(m, w, h, 1, true), nr = P.rowStart[h], size = new Float64Array(nr);
+    let best = -1;
+    for (let i = 0; i < nr; i++) size[P.root[i]] += P.re[i] - P.rs[i] + 1;
+    for (let i = 0; i < nr; i++) if (P.root[i] === i && (best < 0 || size[i] > size[best])) best = i;
+    m.fill(0);
+    for (let y = 0; y < h && best >= 0; y++) {
+      for (let i = P.rowStart[y]; i < P.rowStart[y + 1]; i++) if (P.root[i] === best) m.fill(1, y * w + P.rs[i], y * w + P.re[i] + 1);
+    }
+  }
+  // Square window of side 2r + 1 on a 0/1 image, rows then columns: dilation ("all" false: the outside of the image is
+  // background) or erosion ("all" true: the outside of the image is foreground), as cv2.dilate and cv2.erode. A pixel of the
+  // result differs from "miss" when a pixel of value "look" (1 for dilation, 0 for erosion) lies within r along the row, then
+  // along the column (distance to the last one seen from either side). Returns a new Uint8Array.
+  function squareFilter(src, w, h, r, all) {
+    const n = w * h, tmp = new Uint8Array(n), out = new Uint8Array(n), last = new Int32Array(w), FAR = 1 << 29;
+    const look = all ? 0 : 1, miss = 1 - look;
+    for (let y = 0; y < h; y++) {
+      const o = y * w;
+      let p = -FAR;
+      for (let x = 0; x < w; x++) { if (src[o + x] === look) p = x; tmp[o + x] = x - p <= r ? look : miss; }
+      p = FAR;
+      for (let x = w - 1; x >= 0; x--) { if (src[o + x] === look) p = x; if (p - x <= r) tmp[o + x] = look; }
+    }
+    last.fill(-FAR);
+    for (let y = 0; y < h; y++) {
+      const o = y * w;
+      for (let x = 0; x < w; x++) { if (tmp[o + x] === look) last[x] = y; out[o + x] = y - last[x] <= r ? look : miss; }
+    }
+    last.fill(FAR);
+    for (let y = h - 1; y >= 0; y--) {
+      const o = y * w;
+      for (let x = 0; x < w; x++) { if (tmp[o + x] === look) last[x] = y; if (last[x] - y <= r) out[o + x] = look; }
+    }
+    return out;
+  }
+  // Fill the holes of a 0/1 image in place: background pieces (4-connected) that do not touch the image border.
+  function fillHoles4(m, w, h) {
+    const P = runPieces(m, w, h, 0, false), nr = P.rowStart[h], border = new Uint8Array(nr);
+    for (let y = 0; y < h; y++) {
+      for (let i = P.rowStart[y]; i < P.rowStart[y + 1]; i++) if (y === 0 || y === h - 1 || P.rs[i] === 0 || P.re[i] === w - 1) border[P.root[i]] = 1;
+    }
+    for (let y = 0; y < h; y++) {
+      for (let i = P.rowStart[y]; i < P.rowStart[y + 1]; i++) if (border[P.root[i]] === 0) m.fill(1, y * w + P.rs[i], y * w + P.re[i] + 1);
+    }
+  }
+  // Erosion of a 0/1 image by the disc dx^2 + dy^2 <= k^2 with the outside of the image as foreground, in place: a pixel
+  // goes when a background pixel of the image lies within the disc. gd = vertical distance to the nearest background pixel of
+  // the same column (capped at floor(k) + 1); a background pixel at that distance in column x' reaches the pixels of the row
+  // within the half-width s of the disc, the largest whole s with s^2 + gd^2 <= k^2 (integer arithmetic: exact).
+  function erodeDisc(m, w, h, k) {
+    if (!(k > 0)) return;
+    const n = w * h, cap = Math.floor(k) + 1, gd = cap < 65535 ? new Uint16Array(n) : new Int32Array(n), run = new Int32Array(w);
+    run.fill(cap);
+    for (let y = 0; y < h; y++) {
+      const o = y * w;
+      for (let x = 0; x < w; x++) {
+        if (m[o + x] === 0) run[x] = 0; else if (run[x] < cap) run[x]++;
+        gd[o + x] = run[x];
+      }
+    }
+    run.fill(cap);
+    for (let y = h - 1; y >= 0; y--) {
+      const o = y * w;
+      for (let x = 0; x < w; x++) {
+        if (m[o + x] === 0) run[x] = 0; else if (run[x] < cap) run[x]++;
+        if (run[x] < gd[o + x]) gd[o + x] = run[x];
+      }
+    }
+    const hw = new Int32Array(cap + 1), k2 = k * k, diff = new Int32Array(w + 1);
+    for (let d = 0; d <= cap; d++) { let s = -1; while ((s + 1) * (s + 1) + d * d <= k2) s++; hw[d] = s; }
+    for (let y = 0; y < h; y++) {
+      const o = y * w;
+      let any = false;
+      for (let x = 0; x < w; x++) {
+        const s = hw[gd[o + x]];
+        if (s < 0) continue;
+        diff[x - s < 0 ? 0 : x - s]++;
+        diff[x + s + 1 > w ? w : x + s + 1]--;
+        any = true;
+      }
+      if (!any) continue;
+      let c = 0;
+      for (let x = 0; x < w; x++) { c += diff[x]; diff[x] = 0; if (c > 0) m[o + x] = 0; }
+      diff[w] = 0;
+    }
+  }
+  // The object inside the mask as the region to analyse (boxcount.py object_region: the region of
+  // yoshi_column_isocontour.py, with erode 0 meaning no erosion). gray: the analysed channel before any blur; roi: the drawn
+  // mask, or null for the whole image. opts: darker (default true: object = gray < t; false: gray > t), erode (k px, default
+  // 10; 0 = none), close (odd side of the closing square, default 9; 0 or 1 = none), threshold (default: Otsu of the grey
+  // values inside the mask). Steps: the object pixels inside the mask, their largest 8-connected piece, closing (dilation
+  // then erosion by the square), holes filled, erosion by the disc of radius k, pixels outside the mask dropped.
+  // Returns { region: Uint8Array, count, threshold }; the region is empty when no pixel is on the object side of t.
+  function objectRegion(gray, h, w, roi, opts) {
+    opts = opts || {};
+    const n = h * w;
+    if (gray.length !== n) throw new Error("gray must have h*w elements");
+    if (roi && roi.length !== n) throw new Error("roi and gray must have the same shape");
+    const darker = opts.darker !== false, k = Math.trunc(optNum(opts.erode, 10)), cs = Math.trunc(optNum(opts.close, 9));
+    if (!(k >= 0)) throw new Error("erode must be 0 or more");
+    if (cs > 1 && cs % 2 === 0) throw new Error("close must be an odd number of pixels, or 0 or 1 for no closing");
+    const t = (opts.threshold === undefined || opts.threshold === null) ? otsuThreshold(gray, roi) : opts.threshold;
+    let m = new Uint8Array(n), any = false;
+    for (let i = 0; i < n; i++) {
+      if (roi && roi[i] === 0) continue;
+      const v = gray[i];
+      if (darker ? v < t : v > t) { m[i] = 1; any = true; }
+    }
+    if (any) {
+      keepLargest8(m, w, h);
+      if (cs > 1) m = squareFilter(squareFilter(m, w, h, (cs - 1) / 2, false), w, h, (cs - 1) / 2, true);
+      fillHoles4(m, w, h);
+      erodeDisc(m, w, h, k);
+      if (roi) for (let i = 0; i < n; i++) if (roi[i] === 0) m[i] = 0;
+    }
+    let cnt = 0;
+    for (let i = 0; i < n; i++) cnt += m[i];
+    return { region: m, count: cnt, threshold: t };
+  }
+
+  // Normal distribution function Phi(x) = erfc(-x / sqrt 2) / 2, with the Chebyshev fit of erfc of Numerical Recipes
+  // (2nd ed., section 6.2; fractional error below 1.2e-7).
+  function normCdf(x) {
+    const z = Math.abs(x) / Math.SQRT2, t = 1 / (1 + 0.5 * z);
+    const r = t * Math.exp(-z * z - 1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418 + t * (-0.18628806 +
+      t * (0.27886807 + t * (-1.13520398 + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
+    return x >= 0 ? 1 - 0.5 * r : 0.5 * r;
+  }
+  // Noise stability kappa of the contour at threshold T (boxcount.py noise_stability, the check of
+  // yoshi_column_isocontour.py on our contour cells). Two independent draws of Gaussian noise of sd sigma grey levels are
+  // added to the grey image; each is thresholded like the page (gray + noise > T, the complement when invert) and its contour
+  // cells are taken inside the roi. a = the cells of draw 1, Bd = the cells of draw 2 dilated by a 3 x 3 square;
+  // obs = |a and Bd| / |a| (share of the contour that stays within 1 px), ch = |Bd inside the roi| / |roi| (that share for a
+  // contour placed at random), kappa = (obs - ch) / (1 - ch): about 1 when the noise moves the contour by 1 px at most, about
+  // 0 when it moves it at random. NaN without contour. opts: sigma (default 1), seed (default 0), invert.
+  // The noise e = sigma Phi^-1(u) is drawn by inversion from u = rng32(seed) (draw 1 then draw 2, pixels of the roi in raster
+  // order), and gray + e > T is tested as u > Phi((T - gray) / sigma), the same event; Phi is tabulated for the 256 values of
+  // an 8-bit grey image, and for whole-number differences T - gray otherwise. A pixel 8.5 sigma or more from T keeps its side
+  // without a draw (the noise would flip it with a chance below 1e-16).
+  function noiseStability(gray, h, w, roi, T, opts) {
+    opts = opts || {};
+    const n = h * w, sigma = optNum(opts.sigma, 1), inv = !!opts.invert, rnd = rng32(optNum(opts.seed, 0));
+    if (gray.length !== n) throw new Error("gray must have h*w elements");
+    if (roi && roi.length !== n) throw new Error("roi and gray must have the same shape");
+    if (!(sigma > 0)) throw new Error("sigma must be positive");
+    let known = roi;
+    const tag = Object.prototype.toString.call(gray);
+    if (!ArrayBuffer.isView(gray) || tag === "[object Float64Array]" || tag === "[object Float32Array]") {
+      let unknown = false;
+      for (let i = 0; i < n; i++) if (!Number.isFinite(gray[i])) { unknown = true; break; }
+      if (unknown) {
+        known = new Uint8Array(n);
+        for (let i = 0; i < n; i++) known[i] = (Number.isFinite(gray[i]) && (!roi || roi[i] !== 0)) ? 1 : 0;
+      }
+    }
+    const TAB = 512, tab = new Float64Array(2 * TAB + 1), u8 = tag === "[object Uint8Array]" || tag === "[object Uint8ClampedArray]";
+    const CUT = 8.5 * sigma, a = inv ? 0 : 1, b = 1 - a, side = new Uint8Array(256);     // side: a or b without a draw, 2 = draw
+    if (u8) {
+      for (let v = 0; v < 256; v++) { const d = T - v; tab[v] = normCdf(d / sigma); side[v] = d <= -CUT ? a : (d >= CUT ? b : 2); }
+    } else for (let d = -TAB; d <= TAB; d++) tab[d + TAB] = normCdf(d / sigma);
+    const draw = function () {
+      const m = new Uint8Array(n);
+      if (u8) {
+        for (let i = 0; i < n; i++) {
+          if (known && known[i] === 0) continue;
+          const v = gray[i], s = side[v];
+          m[i] = s !== 2 ? s : (rnd() > tab[v] ? a : b);
+        }
+        return m;
+      }
+      for (let i = 0; i < n; i++) {
+        if (known && known[i] === 0) continue;
+        const d = T - gray[i];
+        if (d <= -CUT) { m[i] = a; continue; }
+        if (d >= CUT) { m[i] = b; continue; }
+        const p = (d >= -TAB && d <= TAB && d === Math.floor(d)) ? tab[d + TAB] : normCdf(d / sigma);
+        m[i] = rnd() > p ? a : b;
+      }
+      return m;
+    };
+    const ma = draw(), mb = draw();
+    const ca = contourCells(ma, h, w, known), cb = contourCells(mb, h, w, known), tmp = new Uint8Array(n);
+    for (let y = 0; y < h; y++) {
+      const o = y * w;
+      for (let x = 0; x < w; x++) { const i = o + x; tmp[i] = cb[i] | (x > 0 ? cb[i - 1] : 0) | (x < w - 1 ? cb[i + 1] : 0); }
+    }
+    let na = 0, nab = 0, nr = 0, nbr = 0;
+    for (let i = 0; i < n; i++) {
+      const bd = tmp[i] | (i >= w ? tmp[i - w] : 0) | (i < n - w ? tmp[i + w] : 0);
+      if (ca[i] !== 0) { na++; nab += bd; }
+      if (!known || known[i] !== 0) { nr++; nbr += bd; }
+    }
+    if (na === 0 || nr === 0) return NaN;
+    const obs = nab / na, ch = nbr / nr;
+    return ch < 1 ? (obs - ch) / (1 - ch) : NaN;
+  }
+
   // ------------------------------------------------------------------ jobs (run in a Web Worker, or on the main thread as a fallback)
 
-  // kind "analyse": { mask, h, w, roi, opts }  ->  fit + counts matrix.   kind "scan": { gray, h, w, roi, levels, invert, opts }.
+  // kind "analyse": { mask, h, w, roi, opts, noise }  ->  fit + counts matrix (+ kappa when noise = { gray, T, invert }).
+  // kind "scan": { gray, h, w, roi, levels, invert, opts, noise }  (+ scan.kappa per level when noise is true).
   // kind "calib": see calibCase.   kind "validate": see valCase.
   function execJob(kind, p, onProgress) {
     const t0 = Date.now();
@@ -1773,11 +2039,26 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
     if (kind === "analyse") {
       const o = Object.assign({}, p.opts, { onProgress: onProgress || null });
       const res = analyse(p.mask, p.h, p.w, p.roi || null, o);
-      return { kind: kind, fit: res.fit, counts: res.bc.counts, nOff2: res.bc.nOff2, sizes: res.bc.sizes, ms: Date.now() - t0 };
+      const out = { kind: kind, fit: res.fit, counts: res.bc.counts, nOff2: res.bc.nOff2, sizes: res.bc.sizes };
+      if (p.noise) out.kappa = noiseStability(p.noise.gray, p.h, p.w, p.roi || null, p.noise.T, { invert: !!p.noise.invert });
+      out.ms = Date.now() - t0;
+      return out;
     }
     if (kind === "scan") {
-      const o = Object.assign({}, p.opts, { invert: !!p.invert, onProgress: onProgress || null });
+      const share = p.noise ? 0.85 : 1;
+      const o = Object.assign({}, p.opts, { invert: !!p.invert,
+        onProgress: onProgress ? function (f) { onProgress(share * f); } : null });
       const out = thresholdScan(p.gray, p.h, p.w, p.roi || null, p.levels, o);
+      if (p.noise) {
+        const memo = new Map();
+        out.kappa = [];
+        for (let li = 0; li < out.levels.length; li++) {
+          const t = out.levels[li];
+          if (!memo.has(t)) memo.set(t, noiseStability(p.gray, p.h, p.w, p.roi || null, t, { invert: !!p.invert }));
+          out.kappa.push(memo.get(t));
+          if (onProgress) onProgress(share + (1 - share) * (li + 1) / out.levels.length);
+        }
+      }
       return { kind: kind, scan: out, ms: Date.now() - t0 };
     }
     if (kind === "validate") {
@@ -2015,7 +2296,9 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
     paddedCounter: paddedCounter, valNative: valNative, valCase: valCase,
     fractionAbove: fractionAbove, thresholdForFraction: thresholdForFraction, separability: separability, binStats: binStats,
     rng32: rng32, fft2: fft2, gaussField: gaussField, calibCase: calibCase,
-    version: "1.1"
+    keepLargest8: keepLargest8, squareFilter: squareFilter, fillHoles4: fillHoles4, erodeDisc: erodeDisc,
+    objectRegion: objectRegion, normCdf: normCdf, noiseStability: noiseStability,
+    version: "1.2"
   };
   const g = (typeof window !== "undefined") ? window : ((typeof self !== "undefined") ? self : globalThis);
   g.BoxCount = api;
@@ -2041,12 +2324,13 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
   }
   function sg(v, d) { var s = fx(v, d); return (isNum(v) && s.charAt(0) !== "-") ? "+" + s : s; }
   function u32(r, g, b, a) { return ((a << 24) | (b << 16) | (g << 8) | r) >>> 0; }
-  var MASK_RGB = [233, 30, 140];
+  var MASK_RGB = [233, 30, 140], REGION_RGB = [255, 212, 59];
   var TINT = u32(MASK_RGB[0], MASK_RGB[1], MASK_RGB[2], 72), DIM = u32(0, 0, 0, 165), CONT = u32(255, 122, 26, 255);
 
   var E = {};
   ["btnLoad", "fileIn", "selWork", "viewSeg", "imgInfo", "toolSeg", "rngRadius", "outRadius", "btnUndo", "btnInvertMask",
-    "btnClearMask", "btnWhole", "chkSub", "polyBar", "btnPolyClose", "btnPolyBack", "btnPolyCancel", "roiInfo", "stageWrap",
+    "btnClearMask", "btnWhole", "chkSub", "polyBar", "btnPolyClose", "btnPolyBack", "btnPolyCancel", "selRegion", "selRegionSide",
+    "inErode", "roiInfo", "stageWrap",
     "stage", "cvMain", "cvHud", "emptyMsg", "stageHint", "selChannel", "rngBlur", "outBlur", "rngThr", "outThr", "btnOtsu",
     "chkInvert", "modeSeg", "modeHint", "inMin", "inMax", "inNmin", "inDiv", "inOff", "selEdge", "btnRun", "btnScan", "btnCancel",
     "prog", "runMsg", "resBig", "resStale", "resKv", "resD3Title", "resD3", "resCaution", "plLog", "cvLog", "roLog",
@@ -2062,6 +2346,7 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
     name: "", fullW: 0, fullH: 0, full: null, note: "",
     work: 1, w: 0, h: 0, rgba: null,
     roi: null, roiCount: 0, roiVersion: 0, roiPolys: null, undo: [],
+    regionOn: false, regionSide: "darker", regionK: 10, reg: null, regKey: "", regPolys: null,
     channel: "grey", blur: 0, threshold: 128, invert: false, mode: "interface", view: "image",
     tool: "brush", radius: 12, subtract: false,
     edge: "weighted", minSize: 0, maxSize: 0, nMin: 30, maxDiv: 8, nOff: 4, levelsMode: "even",
@@ -2075,8 +2360,8 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
   // Help me choose: suggested settings, robustness check, calibration with synthetic outlines (Robustness tab)
   var R = { sug: null, rob: null, cal: null, busy: false, kind: "", cancelled: false };
   var CHANNELS = ["grey", "red", "green", "blue", "max", "saturation", "bminusr", "ratio"];
-  var CH_NAMES = { grey: "Grey", red: "Red", green: "Green", blue: "Blue", max: "Max(R,G,B)", saturation: "Saturation",
-    bminusr: "Blue minus Red", ratio: "Blue / Red" };
+  var CH_NAMES = { grey: "Grey", luma709: "Luminance (Rec. 709)", red: "Red", green: "Green", blue: "Blue", max: "Max(R,G,B)",
+    saturation: "Saturation", bminusr: "Blue minus Red", ratio: "Blue / Red" };
   // channels made from colour differences: JPEG stores colour at half resolution, in 8 x 8 blocks of that
   var CHROMA = { saturation: true, bminusr: true, ratio: true };
 
@@ -2107,9 +2392,20 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
       if (S.work > 1) t += "; working size " + S.w + " x " + S.h + " px (1/" + S.work + ")";
       if (S.note) t += ". " + S.note;
       setText(E.imgInfo, t);
-      var n = S.w * S.h;
-      if (S.roiCount === 0) setText(E.roiInfo, "No mask: the whole image (" + thousands(n) + " px) is analysed.");
-      else setText(E.roiInfo, "Mask: " + thousands(S.roiCount) + " of " + thousands(n) + " px (" + (100 * S.roiCount / n).toFixed(1) + " %).");
+      var n = S.w * S.h, rg = getRegion(), m;
+      if (S.roiCount === 0) m = rg ? "No mask." : "No mask: the whole image (" + thousands(n) + " px) is analysed.";
+      else m = "Mask: " + thousands(S.roiCount) + " of " + thousands(n) + " px (" + (100 * S.roiCount / n).toFixed(1) + " %).";
+      if (rg) {
+        var of = S.roiCount > 0 ? S.roiCount : n, where = S.roiCount > 0 ? "the mask" : "the image";
+        if (rg.count > 0) {
+          m += " Object region, the part analysed: " + thousands(rg.count) + " px (" + (100 * rg.count / of).toFixed(1) + " % of " + where + "), " +
+            S.regionSide + " than the Otsu threshold " + fx(rg.threshold, 1) + " of " + CH_NAMES[S.channel] + " before the pre-blur, eroded by " + S.regionK + " px.";
+        } else {
+          m += " Object region: empty" + (rg.error ? " (" + rg.error + ")" : ", nothing of " + where + " is left " + S.regionSide + " than the Otsu threshold " +
+            fx(rg.threshold, 1) + (S.regionK > 0 ? " after the erosion by " + S.regionK + " px" : "")) + ". Lower k, or change the side or the channel.";
+        }
+      }
+      setText(E.roiInfo, m, !!(rg && rg.count === 0));
     }
     var hint = HINTS[S.tool];
     if (!S.w) hint = "";
@@ -2133,6 +2429,10 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
     E.rngRadius.value = String(S.radius);
     E.outRadius.textContent = S.radius + " px";
     E.chkSub.checked = S.subtract;
+    E.selRegion.value = S.regionOn ? "object" : "mask";
+    E.selRegionSide.value = S.regionSide;
+    E.selRegionSide.disabled = !S.regionOn;
+    E.inErode.disabled = !S.regionOn;
     setPressed(E.viewSeg, "view", S.view);
     setPressed(E.toolSeg, "tool", S.tool);
     setPressed(E.modeSeg, "mode", S.mode);
@@ -2302,11 +2602,16 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
 
   // ------------------------------------------------------------------ derived images (channel, blur, binary, counted cells)
 
+  // The analysed channel before the pre-blur (the object region is found on it).
+  function getRaw() {
+    if (S.rawKey !== S.channel) { S.raw = BC.toGray(S.rgba, S.w, S.h, S.channel); S.rawKey = S.channel; }
+    return S.raw;
+  }
   function getGray() {
     var key = S.channel + "|" + S.blur;
     if (S.grayKey !== key) {
-      if (S.rawKey !== S.channel) { S.raw = BC.toGray(S.rgba, S.w, S.h, S.channel); S.rawKey = S.channel; }
-      S.gray = S.blur >= 1 ? BC.boxBlurU8(S.raw, S.w, S.h, S.blur) : S.raw;
+      var raw = getRaw();
+      S.gray = S.blur >= 1 ? BC.boxBlurU8(raw, S.w, S.h, S.blur) : raw;
       S.grayKey = key; S.binKey = ""; S.contKey = ""; S.setKey = "";
     }
     return S.gray;
@@ -2316,16 +2621,48 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
     if (S.binKey !== key) { S.bin = BC.thresholdMask(g, S.threshold, S.invert); S.binKey = key; S.contKey = ""; S.setKey = ""; }
     return S.bin;
   }
-  function roiForJob() { return (S.roiCount > 0 && S.roiCount < S.w * S.h) ? S.roi : null; }
+  // What the jobs analyse, as a tag for the keys: the drawn mask, or the object region found inside it.
+  function roiTag() {
+    return S.regionOn ? S.roiVersion + ":object:" + S.channel + ":" + S.regionSide + ":" + S.regionK : String(S.roiVersion);
+  }
+  // The object region (Region: drawn mask, object only), kept until the mask, the channel or its settings change; null when
+  // that option is off. { region, count, threshold } (BC.objectRegion), plus error when no threshold could be found.
+  function getRegion() {
+    if (!S.regionOn || !S.w) return null;
+    var key = roiTag() + "|" + S.imgVersion + "|" + S.w + "x" + S.h;
+    if (S.regKey !== key) {
+      try {
+        S.reg = BC.objectRegion(getRaw(), S.h, S.w, S.roiCount > 0 ? S.roi : null, { darker: S.regionSide !== "brighter", erode: S.regionK, close: 9 });
+      } catch (e) {
+        S.reg = { region: new Uint8Array(S.w * S.h), count: 0, threshold: NaN, error: (e && e.message) || String(e) };
+      }
+      S.regKey = key; S.regPolys = null;
+    }
+    return S.reg;
+  }
+  // The pixels that the jobs analyse: the object region when that option is on (even when it is empty), else the drawn
+  // mask, or null for the whole image. roiActive is the same with the mask as drawn (for the grey statistics inside it).
+  function roiForJob() {
+    var rg = getRegion();
+    if (rg) return rg.region;
+    return (S.roiCount > 0 && S.roiCount < S.w * S.h) ? S.roi : null;
+  }
+  function roiActive() { var rg = getRegion(); return rg ? rg.region : (S.roiCount > 0 ? S.roi : null); }
+  // Message for the jobs when the object region is on and empty (null when there is something to analyse).
+  function regionEmptyText() {
+    var rg = getRegion();
+    if (!rg || rg.count > 0) return null;
+    return "the object region is empty" + (rg.error ? " (" + rg.error + ")" : "") + ": lower k, change the side or the channel, or set Region to Drawn mask.";
+  }
   function getCont() {
-    var b = getBin(), key = S.binKey + "|" + S.roiVersion;
+    var b = getBin(), key = S.binKey + "|" + roiTag();
     if (S.contKey !== key) { S.cont = BC.contourCells(b, S.h, S.w, roiForJob()); S.contKey = key; }
     return S.cont;
   }
   // The cells that the current analysis mode counts: outline cells (interface) or foreground pixels inside the mask (set).
   function countCells() {
     if (S.mode !== "set") return { cells: getCont(), key: S.contKey };
-    var b = getBin(), key = S.binKey + "|" + S.roiVersion + "|set";
+    var b = getBin(), key = S.binKey + "|" + roiTag() + "|set";
     if (S.setKey !== key) {
       var r = roiForJob(), n = b.length, o = new Uint8Array(n);
       for (var i = 0; i < n; i++) o[i] = (b[i] !== 0 && (!r || r[i] !== 0)) ? 1 : 0;
@@ -2361,12 +2698,14 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
     S.ovCtx.putImageData(S.ovImg, 0, 0, x0, y0, x1 - x0 + 1, y1 - y0 + 1);
   }
   function scheduleOutline() {
-    S.roiPolys = null;
+    S.roiPolys = null; S.regPolys = null;
     if (S.outlineTimer) clearTimeout(S.outlineTimer);
     S.outlineTimer = setTimeout(function () {
       S.outlineTimer = 0;
       if (S.drawing) { scheduleOutline(); return; }
       S.roiPolys = S.roiCount > 0 ? BC.roiToPolygons(S.roi, S.w, S.h) : [];
+      var rg = getRegion();
+      S.regPolys = (rg && rg.count > 0) ? BC.roiToPolygons(rg.region, S.w, S.h) : [];
       queueDraw();
     }, 60);
   }
@@ -2406,19 +2745,20 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
     S.contDispKey = key;
   }
 
-  function drawOutline(ctx) {
+  // Outline of the mask (polys = S.roiPolys, white halo) or of the object region (S.regPolys, dark halo).
+  function drawOutline(ctx, polys, rgb, halo) {
     ctx.save();
     ctx.lineJoin = "round"; ctx.lineCap = "round";
     ctx.beginPath();
-    S.roiPolys.forEach(function (p) {
+    polys.forEach(function (p) {
       for (var i = 0; i < p.length; i++) {
         var x = p[i][0] * S.sc, y = p[i][1] * S.sy;
         if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
       ctx.closePath();
     });
-    ctx.strokeStyle = "rgba(255,255,255,0.95)"; ctx.lineWidth = 3.5 * S.dpr; ctx.stroke();
-    ctx.strokeStyle = "rgb(" + MASK_RGB.join(",") + ")"; ctx.lineWidth = 1.75 * S.dpr; ctx.stroke();
+    ctx.strokeStyle = halo; ctx.lineWidth = 3.5 * S.dpr; ctx.stroke();
+    ctx.strokeStyle = "rgb(" + rgb.join(",") + ")"; ctx.lineWidth = 1.75 * S.dpr; ctx.stroke();
     ctx.restore();
   }
 
@@ -2435,7 +2775,8 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
     if (S.view === "contour") { ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(0, 0, dw, dh); }
     ctx.drawImage(S.ovC, 0, 0, dw, dh);
     if (S.view === "contour") { buildContDisplay(); ctx.drawImage(S.contC, 0, 0); }
-    if (!S.drawing && S.roiPolys && S.roiPolys.length) drawOutline(ctx);
+    if (!S.drawing && S.roiPolys && S.roiPolys.length) drawOutline(ctx, S.roiPolys, MASK_RGB, "rgba(255,255,255,0.95)");
+    if (!S.drawing && S.regionOn && S.regPolys && S.regPolys.length) drawOutline(ctx, S.regPolys, REGION_RGB, "rgba(0,0,0,0.85)");
   }
 
   function queueDraw() {
@@ -2689,7 +3030,8 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
   // ------------------------------------------------------------------ settings (shared by the controls and window.app)
 
   var CHANNEL_ALIASES = {
-    grey: "grey", gray: "grey", red: "red", green: "green", blue: "blue", max: "max", "max(r,g,b)": "max",
+    grey: "grey", gray: "grey", luma709: "luma709", luminance: "luma709", "luminance (rec. 709)": "luma709", "rec. 709": "luma709",
+    "rec709": "luma709", "709": "luma709", red: "red", green: "green", blue: "blue", max: "max", "max(r,g,b)": "max",
     saturation: "saturation", bminusr: "bminusr", "blue minus red": "bminusr", "b-r": "bminusr",
     ratio: "ratio", "b/r": "ratio", "blue/red": "ratio", "blue / red (ratio)": "ratio"
   };
@@ -2723,9 +3065,41 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
     if (!c) throw new Error("unknown channel: " + name);
     S.channel = c;
     E.selChannel.value = c;
+    if (S.regionOn) regionChanged();
     refreshStale();
     queueDraw();
     return c;
+  }
+  // Region: the drawn mask, or the object inside it (o.object), darker or brighter than its background (o.side), eroded by
+  // o.erode px. Keys left out keep their value. Returns the settings and, with an image, the size of the region.
+  function setRegion(o) {
+    o = o || {};
+    if ("side" in o) {
+      var sd = String(o.side).toLowerCase();
+      if (sd !== "darker" && sd !== "brighter") throw new Error("side must be darker or brighter");
+      S.regionSide = sd;
+    }
+    if ("erode" in o) {
+      var k = Math.round(+o.erode);
+      if (!(k >= 0)) throw new Error("erode must be 0 or more");
+      S.regionK = Math.min(k, 200);
+    }
+    if ("object" in o) S.regionOn = !!o.object;
+    E.selRegion.value = S.regionOn ? "object" : "mask";
+    E.selRegionSide.value = S.regionSide;
+    E.inErode.value = String(S.regionK);
+    regionChanged();
+    syncControls();
+    var rg = getRegion();
+    return { object: S.regionOn, side: S.regionSide, erode: S.regionK, pixels: rg ? rg.count : (S.w ? (S.roiCount || S.w * S.h) : 0),
+      threshold: rg ? rg.threshold : null };
+  }
+  function regionChanged() {
+    S.contKey = ""; S.setKey = "";
+    if (S.w) scheduleOutline();
+    refreshInfo();
+    refreshStale();
+    queueDraw();
   }
   function setBlur(n) {
     n = clamp(Math.round(+n), 0, 4);
@@ -2780,8 +3154,8 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
   function otsu() {
     if (!S.w) return null;
     var t;
-    try { t = BC.otsuThreshold(getGray(), S.roiCount > 0 ? S.roi : null); }
-    catch (e) { setText(E.runMsg, "Otsu failed: " + e.message, true); return null; }
+    try { t = BC.otsuThreshold(getGray(), roiActive()); }
+    catch (e) { setText(E.runMsg, "Otsu failed: " + (regionEmptyText() || e.message), true); return null; }
     return setThreshold(Math.floor(t));
   }
 
@@ -2815,6 +3189,9 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
   E.rngThr.addEventListener("input", function () { setThreshold(+E.rngThr.value); });
   E.btnOtsu.addEventListener("click", otsu);
   E.chkInvert.addEventListener("change", function () { setInvert(E.chkInvert.checked); });
+  E.selRegion.addEventListener("change", function () { setRegion({ object: E.selRegion.value === "object" }); });
+  E.selRegionSide.addEventListener("change", function () { setRegion({ side: E.selRegionSide.value }); });
+  E.inErode.addEventListener("change", function () { var k = parseInt(E.inErode.value, 10); setRegion({ erode: k >= 0 ? k : S.regionK }); });
   ["inMin", "inMax", "inNmin", "inDiv", "inOff", "selEdge"].forEach(function (id) { E[id].addEventListener("change", readAdvanced); });
   function setScanLevels(m) {
     if (m !== "even" && m !== "pct") throw new Error("unknown scan levels: " + m);
@@ -2958,7 +3335,14 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
   }
   function settingsKey(noThreshold) {
     return [S.imgVersion, S.work, S.channel, S.blur, noThreshold ? "-" + S.levelsMode : S.threshold, S.mode === "set" ? (S.invert ? 1 : 0) : 0,
-      S.mode, S.edge, S.minSize, S.maxSize, S.nMin, S.maxDiv, S.nOff, S.roiVersion].join("|");
+      S.mode, S.edge, S.minSize, S.maxSize, S.nMin, S.maxDiv, S.nOff, roiTag()].join("|");
+  }
+  // The region setting and, when it is on, the region found (pixels at the work resolution).
+  function regionSnapshot() {
+    var rg = getRegion();
+    if (!rg) return { object: false };
+    return { object: true, side: S.regionSide, erode_px: S.regionK, close_px: 9, channel: S.channel, otsu_threshold: isNum(rg.threshold) ? rg.threshold : null,
+      pixels_work: rg.count, fraction: S.w ? rg.count / (S.w * S.h) : 0 };
   }
   function settingsSnapshot() {
     return {
@@ -2966,7 +3350,8 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
       channel: S.channel, pre_blur_px: S.blur, threshold: S.threshold, invert: S.invert,
       mode: S.mode, edge: S.edge, min_box_px: S.minSize || null, max_box_px: S.maxSize || null,
       n_min: S.nMin, max_div: S.maxDiv, grid_offsets_per_axis: S.nOff,
-      mask_pixels_work: S.roiCount, mask_fraction: S.w ? S.roiCount / (S.w * S.h) : 0
+      mask_pixels_work: S.roiCount, mask_fraction: S.w ? S.roiCount / (S.w * S.h) : 0,
+      region: regionSnapshot()
     };
   }
   function setBusy(b) {
@@ -2986,17 +3371,20 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
       s_lo: f.s_lo, s_hi: f.s_hi, n_pts: f.n_pts, rms: f.rms, drift: f.drift, intercept: f.intercept, quality: f.quality,
       sizes: Array.from(f.sizes), counts: Array.from(f.counts), D_local: Array.from(f.D_local), used: Array.from(f.used),
       extent: f.extent, s_cap: f.s_cap,
-      D3: f.D + 1, ms: res.ms, key: key, settings: settingsSnapshot()
+      D3: f.D + 1, kappa: isNum(res.kappa) ? res.kappa : NaN, ms: res.ms, key: key, settings: settingsSnapshot()
     };
   }
 
   function run() {
     if (!S.w) return Promise.reject(new Error("no image loaded"));
     if (S.busy) return Promise.reject(new Error("an analysis is already running"));
+    var empty = regionEmptyText();
+    if (empty) { setText(E.runMsg, "Cannot run: " + empty, true); return Promise.reject(new Error(empty)); }
     var key = settingsKey(false), bin = getBin(), roi = roiForJob(), t0 = performance.now();
     setBusy(true);
     setText(E.runMsg, "Running...");
-    return runJob("analyse", { mask: bin, h: S.h, w: S.w, roi: roi, opts: currentOpts() }, progressFn("Counting boxes: ")).then(function (res) {
+    return runJob("analyse", { mask: bin, h: S.h, w: S.w, roi: roi, opts: currentOpts(), noise: { gray: getGray(), T: S.threshold, invert: S.invert } },
+      progressFn("Counting boxes: ")).then(function (res) {
       S.result = buildResult(res, key);
       setBusy(false);
       setText(E.runMsg, "Done in " + ((performance.now() - t0) / 1000).toFixed(1) + " s.");
@@ -3032,7 +3420,9 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
   function runScan() {
     if (!S.w) return Promise.reject(new Error("no image loaded"));
     if (S.busy) return Promise.reject(new Error("an analysis is already running"));
-    var gray = getGray(), roiAct = S.roiCount > 0 ? S.roi : null, mode = S.levelsMode, gr = BC.grayRange(gray, roiAct), thr, lev;
+    var empty = regionEmptyText();
+    if (empty) { setText(E.runMsg, "Cannot scan: " + empty, true); return Promise.reject(new Error(empty)); }
+    var gray = getGray(), roiAct = roiActive(), mode = S.levelsMode, gr = BC.grayRange(gray, roiAct), thr, lev;
     if (mode === "even") {
       if (!(gr.max > gr.min)) {
         setText(E.runMsg, "Threshold scan needs at least two distinct grey values inside the mask.", true);
@@ -3051,12 +3441,13 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
     var key = settingsKey(true), t0 = performance.now(), snap = settingsSnapshot(), inv = S.invert;
     setBusy(true);
     setText(E.runMsg, "Scanning thresholds...");
-    return runJob("scan", { gray: gray, h: S.h, w: S.w, roi: roiForJob(), levels: thr, invert: S.invert, opts: currentOpts() },
+    return runJob("scan", { gray: gray, h: S.h, w: S.w, roi: roiForJob(), levels: thr, invert: S.invert, opts: currentOpts(), noise: true },
       progressFn("Threshold scan: ")).then(function (res) {
       var sc = res.scan;
       S.scan = {
         mode: mode, level01: lev, levels: Array.from(sc.levels), D: Array.from(sc.D), D_err: Array.from(sc.D_err), s_lo: Array.from(sc.s_lo),
         s_hi: Array.from(sc.s_hi), frac: Array.from(sc.frac), quality: Array.from(sc.quality), ok: Array.from(sc.ok), drift: Array.from(sc.drift),
+        kappa: sc.kappa ? Array.from(sc.kappa) : sc.levels.map(function () { return NaN; }),
         gmin: gr.min, gmax: gr.max, invert: inv, key: key, settings: snap, ms: res.ms
       };
       setBusy(false);
@@ -3105,7 +3496,7 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
   // The box limit of the automatic fit in words: where it sits and what it was measured on.
   function limitText(r) {
     if (!isNum(r.s_cap)) return "off: the fit may use box sizes of any size";
-    var where = r.settings.mask_pixels_work ? "the mask" : "the image";
+    var where = (r.settings.region && r.settings.region.object) ? "the object region" : (r.settings.mask_pixels_work ? "the mask" : "the image");
     return "box sides up to " + Math.floor(r.s_cap) + " px are fitted: at least " + r.settings.max_div + " boxes across " + where +
       " (its shorter side is " + r.extent + " px). Larger sizes are hatched on the plots and not fitted.";
   }
@@ -3121,6 +3512,20 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
   }
   // Shown under the comparison with 7/3 and 8/3 when the fit is flagged: D is then the least bad window, not a dimension.
   var FLAGGED_D3 = "The fit is flagged (see Quality): D is the least bad window, not a dimension, so the comparison above carries no weight.";
+  // The noise check (kappa of BC.noiseStability) in words.
+  var KAPPA_LOW = 0.5;
+  function kappaText(k) {
+    if (!isNum(k)) return "n/a: no contour at this threshold";
+    return fx(k, 2) + ": share of the contour that stays within 1 px when 1 grey level of noise is added, corrected for chance (1 = steady, 0 = random)" +
+      (k < KAPPA_LOW ? ". Below 0.5: the smallest boxes measure noise at this threshold" : "");
+  }
+  // The analysed region of a settings snapshot in words.
+  function regionWords(st) {
+    var rg = st.region;
+    if (!rg || !rg.object) return "mask " + fx(100 * st.mask_fraction, 1) + " % of the image";
+    return "object region " + fx(100 * rg.fraction, 1) + " % of the image (" + rg.side + " than Otsu " + fx(rg.otsu_threshold, 1) + " inside the " +
+      (st.mask_pixels_work ? "mask" : "image") + ", eroded by " + rg.erode_px + " px)";
+  }
 
   function renderResults() {
     var r = S.result;
@@ -3143,9 +3548,10 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
       addKv(E.resKv, "Slope drift", sg(r.drift, 3) + " (D of the upper half of the range minus the lower half)");
       addKv(E.resKv, "D_err parts", fx(r.sd_window, 3) + " from the choice of range, " + fx(r.sd_offsets, 3) + " from the grid origin");
       addKv(E.resKv, "Quality", qualityText(r.quality), r.quality === "ok" ? "" : "warnq");
+      addKv(E.resKv, "Noise check (kappa)", kappaText(r.kappa), isNum(r.kappa) && r.kappa < KAPPA_LOW ? "warnq" : "");
       var st = r.settings;
       addKv(E.resKv, "Settings", st.mode + " mode, " + st.channel + " channel, threshold " + st.threshold + (st.invert ? " (inverted)" : "") +
-        ", blur " + st.pre_blur_px + " px, mask " + fx(100 * st.mask_fraction, 1) + " % of the image");
+        ", blur " + st.pre_blur_px + " px, " + regionWords(st));
       E.resD3Title.textContent = "D3 = D + 1 = " + fmtPM(r.D + 1, r.D_err);
       [[7 / 3, "7/3", "4/3"], [8 / 3, "8/3", "5/3"]].forEach(function (t) {
         var p = document.createElement("p");
@@ -3635,6 +4041,7 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
       s += " | D = " + fmtPM(sc.D[i], sc.D_err[i]) + " | range " + sc.s_lo[i] + " to " + sc.s_hi[i] + " px";
       if (sc.ok[i] !== true) s += " | " + sc.quality[i];
     } else s += " | no fit at this level";
+    if (sc.kappa && isNum(sc.kappa[i])) s += " | noise kappa " + fx(sc.kappa[i], 2) + (sc.kappa[i] < KAPPA_LOW ? " (smallest boxes measure noise)" : "");
     return s;
   }
 
@@ -3747,16 +4154,17 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
       var rows2 = [];
       for (var k = 0; k < sc.levels.length; k++) {
         rows2.push([fx(sc.level01[k], 3), String(sc.levels[k]), fmtFracNum(sc.frac[k]), fx(sc.D[k], 3), fx(sc.D_err[k], 3),
-          isNum(sc.s_lo[k]) ? sc.s_lo[k] + " to " + sc.s_hi[k] : "n/a", flagText(sc, k)]);
+          isNum(sc.s_lo[k]) ? sc.s_lo[k] + " to " + sc.s_hi[k] : "n/a", flagText(sc, k), sc.kappa ? fx(sc.kappa[k], 2) : "n/a"]);
       }
-      host.appendChild(makeTable("Threshold scan", ["level (0-1)", "grey threshold", "foreground fraction", "D", "D_err", "range (px)", "quality"], rows2));
+      host.appendChild(makeTable("Threshold scan", ["level (0-1)", "grey threshold", "foreground fraction", "D", "D_err", "range (px)", "quality",
+        "noise kappa"], rows2));
     }
     if (!r && !sc) host.textContent = "No values yet.";
   }
 
   // ------------------------------------------------------------------ export
 
-  var VERSION = "1.1";
+  var VERSION = "1.2";
   // the light theme's plot colours (exported PNGs are always light)
   var LIGHT = { surface: "#FFFFFF", ink: "#1D1D20", ink2: "#3A3A3E", muted: "#6A6A6F", grid: "#DCDCE0", axis: "#B4B4BB",
     s1: "#C64F07", s2: "#3D5E80", s3: "#2F6B4F", s4: "#93221F",
@@ -3778,12 +4186,23 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
   function csvScanText() {
     var sc = S.scan;
     if (!sc) return "";
-    var lines = ["level_0_1,grey_threshold,foreground_fraction,D,D_err,s_lo_px,s_hi_px,drift,quality_ok,quality"];
+    var lines = ["level_0_1,grey_threshold,foreground_fraction,D,D_err,s_lo_px,s_hi_px,drift,quality_ok,quality,noise_kappa"];
     for (var i = 0; i < sc.levels.length; i++) {
       lines.push([csvNum(sc.level01[i]), sc.levels[i], csvNum(sc.frac[i]), csvNum(sc.D[i]), csvNum(sc.D_err[i]), csvNum(sc.s_lo[i]), csvNum(sc.s_hi[i]),
-        csvNum(sc.drift[i]), sc.ok[i] === true ? 1 : 0, csvStr(sc.quality[i])].join(","));
+        csvNum(sc.drift[i]), sc.ok[i] === true ? 1 : 0, csvStr(sc.quality[i]), csvNum(sc.kappa ? sc.kappa[i] : NaN)].join(","));
     }
     return lines.join("\n") + "\n";
+  }
+  var KAPPA_MEANS = "share of the contour inside the analysed region that stays within 1 px when Gaussian noise of sd 1 grey level is added " +
+    "to the channel after the pre-blur (two independent draws, seed 0), corrected for chance: (observed - chance) / (1 - chance); " +
+    "1 = steady, 0 = random; below 0.5 the smallest boxes measure noise";
+  // The region setting for the export, with the rule that finds the object region.
+  function regionJson() {
+    var o = regionSnapshot();
+    o.rule = "object region: on the channel before the pre-blur, the pixels darker (or brighter) than the Otsu threshold of the drawn mask " +
+      "(the whole image when there is none), their largest 8-connected piece, a closing by a 9 x 9 square, holes filled, an erosion by a disc " +
+      "of radius erode_px (0 = none), and the pixels outside the drawn mask dropped; it replaces the mask in every analysis";
+    return o;
   }
   function jsonText() {
     var r = S.result, sc = S.scan;
@@ -3795,9 +4214,11 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
         empty_means: "the whole image is analysed",
         polygons: roiPolygonsImagePx()
       },
+      region: regionJson(),
       result: r ? {
         D: r.D, D_err: r.D_err, sd_window: r.sd_window, sd_offsets: r.sd_offsets, D3: r.D3,
         s_lo_px: r.s_lo, s_hi_px: r.s_hi, n_points: r.n_pts, rms: r.rms, drift: r.drift, intercept_log10: r.intercept, quality: r.quality,
+        noise_kappa: r.kappa, noise_kappa_means: KAPPA_MEANS,
         extent_px: r.extent, box_limit_px: r.s_cap, max_div: r.settings.max_div,
         up_to_date: r.key === settingsKey(false), settings_at_analysis: r.settings,
         sizes_px: r.sizes, count_mean: r.counts, local_slope: r.D_local, used_in_fit: Array.from(r.used, function (u) { return u === 1; }),
@@ -3809,7 +4230,7 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
           : "percentiles of the grey values inside the mask",
         grey_range_in_mask: [sc.gmin, sc.gmax],
         level_0_1: sc.level01, thresholds: sc.levels, D: sc.D, D_err: sc.D_err, s_lo_px: sc.s_lo, s_hi_px: sc.s_hi, drift: sc.drift,
-        foreground_fraction: sc.frac, quality_ok: sc.ok, quality: sc.quality
+        foreground_fraction: sc.frac, quality_ok: sc.ok, quality: sc.quality, noise_kappa: sc.kappa || null
       } : null
     };
     return JSON.stringify(out, function (k, v) { return (typeof v === "number" && !isFinite(v)) ? null : v; }, 2);
@@ -3820,11 +4241,13 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
     var st = r.settings, L = [];
     var pm = function (D, e) { return fmtPM(D, e).replace(/±/g, "+/-"); };
     L.push("Box Counting Tool: " + st.image + " (" + st.image_size_px.join(" x ") + " px, working size " + st.work_size_px.join(" x ") + " px)");
+    var objRegion = !!(st.region && st.region.object);
     L.push("Channel " + st.channel + ", pre-blur " + st.pre_blur_px + " px, threshold " + st.threshold + (st.invert ? " (inverted)" : "") +
-      ", " + st.mode + " mode, edge " + st.edge + ", mask " + (st.mask_pixels_work ? fx(100 * st.mask_fraction, 1) + " % of the image" : "whole image"));
+      ", " + st.mode + " mode, edge " + st.edge + ", " + (objRegion ? regionWords(st) : "mask " + (st.mask_pixels_work ? fx(100 * st.mask_fraction, 1) + " % of the image" : "whole image")));
     L.push("D = " + pm(r.D, r.D_err) + " over " + r.s_lo + " to " + r.s_hi + " px (" + r.n_pts + " box sizes, rms " + fx(r.rms, 3) + ", quality: " + r.quality + ")");
+    L.push("Noise check: kappa = " + kappaText(r.kappa));
     L.push("Box limit: " + (isNum(r.s_cap) ? "box sides up to " + Math.floor(r.s_cap) + " px, at least " + st.max_div + " boxes across the " +
-      (st.mask_pixels_work ? "mask" : "image") + " (shorter side " + r.extent + " px)" : "off"));
+      (objRegion ? "object region" : (st.mask_pixels_work ? "mask" : "image")) + " (shorter side " + r.extent + " px)" : "off"));
     L.push("D3 = D + 1 = " + pm(r.D + 1, r.D_err));
     L.push("vs " + cmpText(r, 7 / 3, "7/3", "4/3"));
     L.push("vs " + cmpText(r, 8 / 3, "8/3", "5/3"));
@@ -3885,7 +4308,8 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
     var st = settingsSnapshot();
     c.font = "12.5px " + LIGHT.font; c.fillStyle = LIGHT.ink2; c.textAlign = "left"; c.textBaseline = "middle";
     c.fillText(st.image + " | " + st.mode + " mode | " + st.channel + " channel | threshold " + st.threshold + (st.invert ? " inverted" : "") +
-      " | mask " + (st.mask_pixels_work ? fx(100 * st.mask_fraction, 1) + " %" : "whole image"), 12, top / 2 + 4);
+      (st.region && st.region.object ? " | object region " + fx(100 * st.region.fraction, 1) + " %, k " + st.region.erode_px + " px"
+        : " | mask " + (st.mask_pixels_work ? fx(100 * st.mask_fraction, 1) + " %" : "whole image")), 12, top / 2 + 4);
     var y = top;
     parts.forEach(function (p) {
       var hd = p.joined ? 0 : head;
@@ -4307,7 +4731,11 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
     if (!S.w) return;
     addPill(S.mode === "set" ? "Set mode" : "Interface mode", "cool");
     addPill(CH_NAMES[S.channel] + ", threshold " + S.threshold + (S.invert ? ", inverted" : "") + (S.blur ? ", blur " + S.blur + " px" : ""));
-    addPill(S.roiCount > 0 ? "mask " + fx(100 * S.roiCount / (S.w * S.h), 1) + " % of the image" : "no mask: whole image", S.roiCount > 0 ? "" : "hot");
+    var rg = getRegion();
+    if (rg) addPill(rg.count > 0 ? "object region " + fx(100 * rg.count / (S.w * S.h), 1) + " % of the image, eroded " + S.regionK + " px" : "object region empty",
+      rg.count > 0 ? "" : "warn");
+    else addPill(S.roiCount > 0 ? "mask " + fx(100 * S.roiCount / (S.w * S.h), 1) + " % of the image" : "no mask: whole image", S.roiCount > 0 ? "" : "hot");
+    if (r && !stale && isNum(r.kappa) && r.kappa < KAPPA_LOW) addPill("noise kappa " + fx(r.kappa, 2) + ": smallest boxes measure noise", "hot");
     if (S.jpeg && CHROMA[S.channel]) addPill("JPEG colour at half resolution", "hot");
     if (r && stale) addPill("result out of date", "warn");
     else if (r) addPill(r.quality === "ok" ? "fit straight" : "fit flagged", r.quality === "ok" ? "ok" : "warn");
@@ -4367,13 +4795,15 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
 
   // ---- 1. suggested settings: rules fixed in advance that read the image and the mask, never D
 
-  function sugKey() { return S.imgVersion + "|" + S.roiVersion + "|" + S.work; }
+  function sugKey() { return S.imgVersion + "|" + roiTag() + "|" + S.work; }
   function otsuOf(g, roiAct) {
     try { return clamp(Math.floor(BC.otsuThreshold(g, roiAct)), 0, 254); } catch (e) { return -1; }
   }
   function suggest() {
     if (!S.w) throw new Error("no image loaded");
-    var w = S.w, h = S.h, roiAct = S.roiCount > 0 ? S.roi : null, best = null, bestG = null;
+    var empty = regionEmptyText();
+    if (empty) throw new Error(empty);
+    var w = S.w, h = S.h, roiAct = roiActive(), best = null, bestG = null;
     var chans = CHANNELS.map(function (c) {
       var g = BC.toGray(S.rgba, w, h, c), hh = BC.histU8(g, roiAct), T = otsuOf(g, roiAct);
       var o = { channel: c, T: T, eta: T >= 0 ? BC.separability(hh, T) : 0, above: T >= 0 ? BC.fractionAbove(hh, T) : NaN };
@@ -4393,7 +4823,8 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
     var jpegChroma = S.jpeg && !!CHROMA[best.channel];
     var minSize = Math.max(blur >= 1 ? 2 * blur + 1 : 0, jpegChroma ? 4 : 0);
     var work = S.fullW * S.fullH > 12e6 ? 2 : 1, warn = [];
-    if (S.roiCount === 0) warn.push({ bad: true, text: "No mask: the whole image is used, sky and ground included. Paint or outline the flow first." });
+    if (S.roiCount === 0 && !S.regionOn) warn.push({ bad: true, text: "No mask: the whole image is used, sky and ground included. Paint or outline the flow first." });
+    if (S.regionOn) warn.push({ bad: false, text: "The object region found on " + CH_NAMES[S.channel] + " stands in for the mask while the channels are compared; Apply finds the region again on the suggested channel." });
     if (st.largestFg < 0.5) {
       warn.push({ bad: true, text: "The largest piece above the threshold holds " + fx(100 * st.largestFg, 0) + " % of that class (" +
         thousands(st.piecesFg) + " pieces). D then describes a texture of many pieces, not one front: it averages over the scales of the pieces and the gaps between them, and it moves with the threshold." });
@@ -4492,7 +4923,7 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
   function thrForShare(hh, share, inv) { return BC.thresholdForFraction(hh, inv ? 1 - share : share); }
   // The mask cut in two at the median column and at the median row of its pixels.
   function maskHalves() {
-    var w = S.w, h = S.h, r = S.roiCount > 0 ? S.roi : null, cols = new Float64Array(w), rows = new Float64Array(h), n = 0, x, y;
+    var w = S.w, h = S.h, r = roiActive(), cols = new Float64Array(w), rows = new Float64Array(h), n = 0, x, y;
     for (y = 0; y < h; y++) for (x = 0; x < w; x++) if (!r || r[y * w + x]) { cols[x]++; rows[y]++; n++; }
     function med(a) { var c = 0; for (var k = 0; k < a.length; k++) { c += a[k]; if (c >= n / 2) return k; } return a.length - 1; }
     var mx = med(cols), my = med(rows);
@@ -4510,7 +4941,7 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
   }
   // Every run of the check, with its job built now (so that moving a control during the check changes nothing).
   function robPlan(base) {
-    var w = S.w, h = S.h, roiAct = S.roiCount > 0 ? S.roi : null, roi = roiForJob(), opts0 = currentOpts();
+    var w = S.w, h = S.h, roiAct = roiActive(), roi = roiForJob(), opts0 = currentOpts();
     var g = getGray(), raw = S.raw, hh = BC.histU8(g, roiAct), share = fgShare(hh, S.threshold, S.invert), list = [], seen = {};
     roi = roi ? roi.slice() : null;
     function job(mask, o, extra) { return Object.assign({ mask: mask, h: h, w: w, roi: roi, opts: Object.assign({}, opts0, o || {}) }, extra || {}); }
@@ -4538,7 +4969,7 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
       var rgba = BC.resizeArea(S.full, S.fullW, S.fullH, nw, nh), r2 = null, sc = w / nw;
       if (roi) {
         var kx = nw / w, ky = nh / h;
-        var polys = BC.roiToPolygons(S.roi, w, h).map(function (p) { return p.map(function (q) { return [q[0] * kx, q[1] * ky]; }); });
+        var polys = BC.roiToPolygons(roi, w, h).map(function (p) { return p.map(function (q) { return [q[0] * kx, q[1] * ky]; }); });
         r2 = new Uint8Array(nw * nh);
         BC.fillPolygons(r2, nw, nh, polys, 1);
       }
@@ -4569,7 +5000,7 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
     var ls = [];
     for (var i = 0; i < r.sizes.length; i++) if (r.sizes[i] >= r.s_lo && r.sizes[i] <= r.s_hi && isNum(r.D_local[i])) ls.push(r.D_local[i]);
     return { D: r.D, D_err: r.D_err, s_lo: r.s_lo, s_hi: r.s_hi, quality: r.quality, ok: r.quality === "ok", mode: r.settings.mode,
-      slo: ls.length ? Math.min.apply(null, ls) : NaN, shi: ls.length ? Math.max.apply(null, ls) : NaN };
+      slo: ls.length ? Math.min.apply(null, ls) : NaN, shi: ls.length ? Math.max.apply(null, ls) : NaN, kappa: isNum(r.kappa) ? r.kappa : NaN };
   }
   function robRow(v, fit, err) {
     var o = { group: v.group, short: v.short, label: v.label, what: v.what || v.label, info: !!v.info, scale: v.scale || 1 };
@@ -4653,6 +5084,7 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
         (s.span > 0.15 ? ": no plateau, so D is an average over a crossover between scales, not the dimension of one scaling range." : ": close to a plateau."));
     }
     if (!b.ok) items.push("The current fit itself is flagged.");
+    if (isNum(b.kappa)) items.push("Noise check at the current threshold: kappa = " + fx(b.kappa, 2) + " (" + (b.kappa < KAPPA_LOW ? "below" : "at or above") + " 0.5).");
     var side = s.lo > 1.5 ? "above" : (s.hi < 1.5 ? "below" : "");
     addCallout(host, s.cls === "bad" ? "bad" : "", [
       [{ b: s.word.charAt(0).toUpperCase() + s.word.slice(1) + ": quote D = " + fx(b.D, 2) + " ± " + fx(s.pm, 2) + "." },
@@ -4662,6 +5094,10 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
         (side === "above" ? "5/3." : "4/3.")
         : "The runs fall on both sides of 1.5, the midpoint of 4/3 and 5/3: with these choices this image cannot tell 4/3 from 5/3."
     ]);
+    if (isNum(b.kappa) && b.kappa < KAPPA_LOW) {
+      addCallout(host, "", ["Noise check: kappa = " + fx(b.kappa, 2) + ". At this threshold 1 grey level of noise moves much of the contour by more than 1 px, " +
+        "so the smallest boxes measure noise rather than the outline. A larger smallest box, a pre-blur, or a threshold where the grey level changes faster helps."]);
+    }
     var info = rb.rows.filter(function (r) { return r.info; })[0];
     if (info) cnote(host, info.short + " (another object, left out of the verdict): " + (isNum(info.D) ? "D = " + fx(info.D, 2) + ", " + (info.ok ? "fit straight" : "fit flagged") : info.quality) + ".");
     var rowsT = [["Current", "the settings as they are", fx(b.D, 3), "", b.s_lo + " to " + b.s_hi, b.quality]].concat(rb.rows.map(function (r) {
@@ -4682,7 +5118,7 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
     var cur = !!(S.result && S.result.key === settingsKey(false));
     if (!cur) setText(E.helpMsg, "Analysing the current settings first...");
     return (cur ? Promise.resolve(S.result) : run()).then(function (base) {
-      var key = settingsKey(false), roiAct = S.roiCount > 0 ? S.roi : null, share = fgShare(BC.histU8(getGray(), roiAct), S.threshold, S.invert);
+      var key = settingsKey(false), roiAct = roiActive(), share = fgShare(BC.histU8(getGray(), roiAct), S.threshold, S.invert);
       var w = S.w, h = S.h, blur = S.blur, mode = S.mode, roi = roiForJob(), opts = currentOpts(), cases = [], rows = [], i = 0, t0 = performance.now();
       roi = roi ? roi.slice() : null;
       opts.fitRange = [base.s_lo, base.s_hi];
@@ -4873,6 +5309,8 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
       loaded: !!S.w, name: S.name, full: [S.fullW, S.fullH], work: [S.w, S.h], divisor: S.work, jpeg: S.jpeg,
       channel: S.channel, blur: S.blur, threshold: S.threshold, invert: S.invert, mode: S.mode, levelsMode: S.levelsMode, view: S.view, tool: S.tool,
       maskPixels: S.roiCount, busy: S.busy, workerInUse: !!worker, workerBroken: workerBroken,
+      region: Object.assign({ object: S.regionOn, side: S.regionSide, erode_px: S.regionK }, S.w && S.regionOn ? regionSnapshot() : {}),
+      kappa: S.result ? S.result.kappa : null,
       resultUpToDate: !!(S.result && S.result.key === settingsKey(false)), hasScan: !!S.scan
     };
   }
@@ -4883,6 +5321,7 @@ caption { text-align: left; font-family: var(--sans); font-size: 12px; color: va
     clearRoi: function () { clearMask(); return 0; },
     setThreshold: setThreshold,
     setChannel: setChannel,
+    setRegion: setRegion,
     setMode: setMode,
     setBlur: setBlur,
     setInvert: setInvert,
